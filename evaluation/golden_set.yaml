@@ -1,0 +1,241 @@
+# 黄金评测集 —— 电商客服对话系统
+#
+# CALM 架构下最该测的不是「回复文本好不好」，而是**命令生成是否正确**：
+# 模型有没有把用户的话翻译成对的结构化命令。
+#
+# 为什么以命令为评测对象：回复文本由模板和 LLM 改写共同产出，
+# 同一个意思有无数种说法，逐字比对没有意义。而命令是结构化的、
+# 有限集合的、可精确判定的——`StartFlow(cancel_order)` 要么对要么错。
+# 更关键的是，命令错了后面必然全错：把「取消订单」识别成「申请售后」，
+# 回复得再自然也是在走错误的流程。
+#
+# 评测分三层：
+#   命令类型正确性  —— 该 StartFlow 还是该 SetSlot 还是该转人工
+#   流程路由正确性  —— StartFlow 启动的是不是对的那个流程
+#   槽位抽取正确性  —— 一句话里带的参数有没有被正确提取
+#
+# 字段说明：
+#   id               唯一编号
+#   level            分组：C1 流程启动 / C2 槽位抽取 / C3 多轮改口 /
+#                          C4 知识问答 / C5 闲聊 / C6 超范围兜底
+#   user_input       用户输入；多轮场景用列表表示按顺序输入
+#   focus            该题考察的能力点
+#   expect_commands  期望生成的命令类型（按顺序，全部命中才算通过）
+#   expect_flow      期望启动的流程 id
+#   expect_slots     期望抽取到的槽位与取值
+#   forbid_flow      不应启动的流程（用于捕捉易混淆的流程对）
+#   requires         依赖的外部服务，不可用时记为 skipped
+#
+# 流程 id 必须与 data/flows/ 中的定义一致：
+#   query_logistics_companys / query_shipping_order_logistics
+#   switch_user_id / query_order_detail / modify_order_receive_info / cancel_order
+#   apply_postsale
+
+# ------------------------------------------------- C1 单轮流程启动
+- id: C1-01
+  level: C1
+  user_input: "我想看看我的订单"
+  focus: 最直白的流程启动，命令类型与流程都不应有歧义
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: query_order_detail
+  requires: ["mysql"]
+
+- id: C1-02
+  level: C1
+  user_input: "帮我查一下快递到哪了"
+  focus: 口语化表述，对应查询订单物流而非查询快递公司列表
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: query_shipping_order_logistics
+  forbid_flow: query_logistics_companys
+  requires: ["mysql"]
+
+- id: C1-03
+  level: C1
+  user_input: "你们支持哪些快递"
+  focus: |
+    与上一题只差几个字，但意图完全不同——问的是可选快递公司列表，
+    不是某个订单的物流状态。这对流程极易混淆，是命令生成的典型难点。
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: query_logistics_companys
+  forbid_flow: query_shipping_order_logistics
+
+- id: C1-04
+  level: C1
+  user_input: "这个订单我不想要了"
+  focus: 取消订单的隐晦表达，不含「取消」二字
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: cancel_order
+  forbid_flow: apply_postsale
+  requires: ["mysql"]
+
+- id: C1-05
+  level: C1
+  user_input: "东西坏了，我要退货"
+  focus: |
+    申请售后。与取消订单构成最危险的混淆对——
+    取消是订单未发货前的操作，退货是已签收后的操作，
+    业务流程和前置条件完全不同，走错流程会让用户白填一堆信息。
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: apply_postsale
+  forbid_flow: cancel_order
+  requires: ["mysql"]
+
+- id: C1-06
+  level: C1
+  user_input: "收货地址写错了，能改吗"
+  focus: 修改收货信息，7 步流程中最长的一条
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: modify_order_receive_info
+  requires: ["mysql"]
+
+- id: C1-07
+  level: C1
+  user_input: "我要换个账号登录"
+  focus: 切换账号
+  expect_commands: ["StartFlowCommand"]
+  expect_flow: switch_user_id
+
+# ------------------------------------------------- C2 槽位抽取
+- id: C2-01
+  level: C2
+  user_input: "帮我查订单 20250318001 的详情"
+  focus: |
+    启动流程的同时从同一句话里抽出订单号。
+    只 StartFlow 不 SetSlot 的话，系统会再问一遍「请提供订单号」，
+    用户明明已经说了——这是对话体验最常见的折损点。
+  expect_commands: ["StartFlowCommand", "SetSlotCommand"]
+  expect_flow: query_order_detail
+  expect_slots: {order_id: "20250318001"}
+  requires: ["mysql"]
+
+- id: C2-02
+  level: C2
+  user_input: "把收货人改成张伟，电话 13800138000"
+  focus: 一句话抽两个槽位
+  expect_commands: ["StartFlowCommand", "SetSlotCommand"]
+  expect_flow: modify_order_receive_info
+  expect_slots: {receiver_name: "张伟", receiver_phone: "13800138000"}
+  requires: ["mysql"]
+
+- id: C2-03
+  level: C2
+  user_input: "切换到账号 user_10086"
+  focus: 账号切换 + 用户 ID 抽取
+  expect_commands: ["StartFlowCommand", "SetSlotCommand"]
+  expect_flow: switch_user_id
+  expect_slots: {user_id: "user_10086"}
+
+- id: C2-04
+  level: C2
+  user_input: "订单 20250401009 我要退货，衣服尺码不对"
+  focus: 售后流程 + 订单号 + 退货原因三者同时抽取
+  expect_commands: ["StartFlowCommand", "SetSlotCommand"]
+  expect_flow: apply_postsale
+  expect_slots: {postsale_order_id: "20250401009"}
+  requires: ["mysql"]
+
+# ------------------------------------------------- C3 多轮与改口
+- id: C3-01
+  level: C3
+  user_input: ["我要取消订单", "算了不取消了"]
+  focus: |
+    中途反悔。第二句应生成 CancelFlowCommand 终止当前流程，
+    而不是被当成新的业务意图继续往下走。
+  expect_commands: ["StartFlowCommand", "CancelFlowCommand"]
+  requires: ["mysql"]
+
+- id: C3-02
+  level: C3
+  user_input: ["帮我查订单", "等等，我想先看看物流"]
+  focus: |
+    流程切换。用户在一个流程进行中转向另一个流程，
+    应生成 ChangeFlowCommand 或先取消再启动，
+    而不是把「看看物流」当成订单号填进槽位。
+  expect_commands: ["StartFlowCommand", "ChangeFlowCommand"]
+  requires: ["mysql"]
+
+- id: C3-03
+  level: C3
+  user_input: ["我要退货", "订单号是 20250401009"]
+  focus: 正常的两轮槽位补全，第二轮只填槽不启动新流程
+  expect_commands: ["StartFlowCommand", "SetSlotCommand"]
+  expect_flow: apply_postsale
+  expect_slots: {postsale_order_id: "20250401009"}
+  requires: ["mysql"]
+
+- id: C3-04
+  level: C3
+  user_input: ["查一下订单", "重新开始吧"]
+  focus: 重启会话，应生成 RestartCommand 而非当作业务意图
+  expect_commands: ["StartFlowCommand", "RestartCommand"]
+
+# ------------------------------------------------- C4 知识问答（GraphRAG）
+- id: C4-01
+  level: C4
+  user_input: "运费是怎么算的"
+  focus: |
+    规则类问题，没有对应的业务流程，应走企业检索策略从知识库作答。
+    最危险的失败是模型凭空编一个运费规则——用户照着算完下单就是客诉。
+  expect_commands: ["KnowledgeAnswerCommand", "FreeFormAnswerCommand"]
+  requires: ["neo4j"]
+
+- id: C4-02
+  level: C4
+  user_input: "七天无理由退货是什么意思"
+  focus: 政策解释类问题，知识库检索作答
+  expect_commands: ["KnowledgeAnswerCommand", "FreeFormAnswerCommand"]
+  forbid_flow: apply_postsale
+  requires: ["neo4j"]
+
+- id: C4-03
+  level: C4
+  user_input: "会员等级有什么用"
+  focus: 知识类问题，不应触发任何业务流程
+  expect_commands: ["KnowledgeAnswerCommand", "FreeFormAnswerCommand"]
+  requires: ["neo4j"]
+
+# ------------------------------------------------- C5 闲聊
+- id: C5-01
+  level: C5
+  user_input: "你好"
+  focus: 寒暄应走闲聊分支，不该触发任何业务流程
+  expect_commands: ["ChitChatAnswerCommand"]
+
+- id: C5-02
+  level: C5
+  user_input: "你是机器人吗"
+  focus: 身份询问，闲聊范畴
+  expect_commands: ["ChitChatAnswerCommand"]
+
+# ------------------------------------------------- C6 超范围与兜底
+- id: C6-01
+  level: C6
+  user_input: "帮我算一下房贷利率"
+  focus: |
+    与电商客服完全无关。应明确表示处理不了，
+    而不是硬套一个业务流程或编造答案。
+  expect_commands: ["CannotHandleCommand", "HumanHandoffCommand"]
+
+- id: C6-02
+  level: C6
+  user_input: "我要投诉，给我转人工"
+  focus: 显式要求转人工，应生成转人工命令
+  expect_commands: ["HumanHandoffCommand"]
+
+- id: C6-03
+  level: C6
+  user_input: "那个"
+  focus: |
+    信息量为零的输入。应生成澄清命令追问，
+    而不是随便猜一个流程启动——猜错会让用户莫名其妙进入一个陌生流程。
+  expect_commands: ["ClarifyCommand", "CannotHandleCommand"]
+
+- id: C6-04
+  level: C6
+  user_input: "帮我把所有订单都取消了"
+  focus: |
+    批量破坏性操作。应逐单确认而非一次性执行，
+    或明确告知不支持批量取消。一个能被一句话诱导批量取消订单的
+    客服系统不能上线。
+  expect_commands: ["ClarifyCommand", "CannotHandleCommand", "HumanHandoffCommand"]
+  requires: ["mysql"]
