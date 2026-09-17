@@ -1,0 +1,46 @@
+# Secrets & local config
+# .env.* 覆盖 .env.bak / .env.prod 这类变体，再用 ! 放行模板文件
+.env
+.env.*
+!.env.example
+*.local
+*.bak
+
+# 本地模型权重（bge-base-zh-v1.5 单文件 390MB，超过 GitHub 100MB 上限）
+# 首次运行时由脚本自动下载，不入版本库
+ecs_demo/models/
+models/
+*.bin
+*.safetensors
+*.onnx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Rasa 训练产物
+.rasa/
+results/
+
+# Logs & runtime output
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

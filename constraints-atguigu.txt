@@ -1,0 +1,38 @@
+# atguigu_ai 版本约束文件
+#
+# 用法（在 setup.py 所在目录执行）：
+#     D:\venv_ecs\Scripts\python.exe -m pip install -e . -c constraints-atguigu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 为什么需要它：
+# requirements-atguigu.txt 里的依赖大多只写了下限（如 langchain>=0.3.0），
+# 直接安装会拉到最新版，而本项目的代码是按 langchain 0.3.x 时代的 API 写的。
+# 不加约束时会出现两类问题：
+#   1. ImportError —— langchain-community 0.4 移除了
+#      langchain_community.graphs.neo4j_graph（Neo4jGraph）和
+#      langchain_community.chains.graph_qa.cypher（CypherQueryCorrector），
+#      而 ecs_demo/addons/information_retrieval.py 直接 import 了这两个。
+#   2. pip 长时间回溯 —— langchain-openai 1.x 要求 openai>=2，
+#      与 requirements 里的 openai<2.0.0 冲突，pip 会逐个版本往下试，非常慢。
+
+# --- LangChain 全家桶：锁在 0.3.x ---
+langchain>=0.3,<0.4
+langchain-core>=0.3.60,<0.4
+langchain-community>=0.3,<0.4
+langchain-openai>=0.3,<0.4
+langchain-anthropic>=0.3,<0.4
+langchain-text-splitters>=0.3,<0.4
+langsmith>=0.3,<0.5
+
+# --- LangGraph：1.0 起要求 langchain-core>=1.0，需排除 ---
+langgraph>=0.4,<1.0
+langgraph-checkpoint<3.0
+langgraph-prebuilt<1.0
+
+# --- OpenAI SDK：与 langchain-openai 0.3.x 匹配 ---
+openai>=1.86,<2
+
+# --- Neo4j 驱动：代码按 5.x 的 execute_query().records 写的 ---
+neo4j>=5.28,<6
+
+# --- transformers：留在 4.x，配合 sentence-transformers 加载 bge-base-zh-v1.5 ---
+transformers<5
